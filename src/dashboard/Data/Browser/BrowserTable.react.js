@@ -160,6 +160,8 @@ export default class BrowserTable extends React.Component {
           className={this.props.className}
           columns={this.props.columns}
           schema={this.props.schema}
+          simplifiedSchema={this.props.simplifiedSchema}
+          filters={this.props.filters}
           currentCol={currentCol}
           isUnique={this.props.isUnique}
           obj={obj}

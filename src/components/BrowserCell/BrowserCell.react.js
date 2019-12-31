@@ -5,6 +5,7 @@
  * This source code is licensed under the license found in the LICENSE file in
  * the root directory of this source tree.
  */
+import * as Filters              from 'lib/Filters';
 import { List, Map }             from 'immutable';
 import { dateStringUTC }         from 'lib/DateUtils';
 import getFileName               from 'lib/getFileName';
@@ -63,8 +64,117 @@ export default class BrowserCell extends Component {
     return isRefDifferent;
   }
 
+  //#region Cell Context Menu related methods
+
+  onContextMenu(event) {
+    if (event.type !== 'contextmenu') { return; }
+    event.preventDefault();
+
+    const { field, hidden, onSelect, setCopyableValue, setContextMenu, row, col } = this.props;
+
+    onSelect({ row, col });
+    setCopyableValue(hidden ? undefined : this.copyableValue);
+
+    const available = Filters.availableFilters(this.props.simplifiedSchema, this.props.filters, Filters.BLACKLISTED_FILTERS);
+    const constraints = available && available[field];
+
+    const { pageX, pageY } = event;
+    const menuItems = this.getContextMenuOptions(constraints);
+    menuItems.length && setContextMenu(pageX, pageY, menuItems);
+  }
+
+  getContextMenuOptions(constraints) {
+    const contextMenuOptions = [];
+
+    const setFilterContextMenuOption = this.getSetFilterContextMenuOption(constraints);
+    setFilterContextMenuOption && contextMenuOptions.push(setFilterContextMenuOption);
+
+    const addFilterContextMenuOption = this.getAddFilterContextMenuOption(constraints);
+    addFilterContextMenuOption && contextMenuOptions.push(addFilterContextMenuOption);
+
+    const relatedObjectsContextMenuOption = this.getRelatedObjectsContextMenuOption();
+    relatedObjectsContextMenuOption && contextMenuOptions.push(relatedObjectsContextMenuOption);
+
+    return contextMenuOptions;
+  }
+
+  getSetFilterContextMenuOption(constraints) {
+    if (constraints) {
+      return {
+        text: 'Set filter...', items: constraints.map(constraint => {
+          const definition = Filters.Constraints[constraint];
+          const text = `${this.props.field} ${definition.name}${definition.comparable ? (' ' + this.copyableValue) : ''}`;
+          return {
+            text,
+            callback: this.pickFilter.bind(this, constraint)
+          };
+        })
+      };
+    }
+  }
+
+  getAddFilterContextMenuOption(constraints) {
+    if (constraints && this.props.filters && this.props.filters.size > 0) {
+      return {
+        text: 'Add filter...', items: constraints.map(constraint => {
+          const definition = Filters.Constraints[constraint];
+          const text = `${this.props.field} ${definition.name}${definition.comparable ? (' ' + this.copyableValue) : ''}`;
+          return {
+            text,
+            callback: this.pickFilter.bind(this, constraint, true)
+          };
+        })
+      };
+    }
+  }
+
+  /**
+   * Returns "Get related records from..." context menu item if cell holds a Pointer
+   * or objectId and there's a class in relation.
+   */
+  getRelatedObjectsContextMenuOption() {
+    const { value, schema, onPointerClick } = this.props;
+
+    const pointerClassName = (value && value.className)
+      || (this.props.field === 'objectId' && this.props.className);
+    if (pointerClassName) {
+      const relatedRecordsMenuItem = { text: 'Get related records from...', items: [] };
+      schema.data.get('classes').sortBy((v, k) => k).forEach((cl, className) => {
+        cl.forEach((column, field) => {
+          if (column.targetClass !== pointerClassName) { return; }
+          relatedRecordsMenuItem.items.push({
+            text: className, callback: () => {
+              let relatedObject = value;
+              if (this.props.field === 'objectId') {
+                relatedObject = new Parse.Object(pointerClassName);
+                relatedObject.id = value;
+              }
+              onPointerClick({ className, id: relatedObject.toPointer(), field })
+            }
+          })
+        });
+      });
+
+      return relatedRecordsMenuItem.items.length ? relatedRecordsMenuItem : undefined;
+    }
+  }
+
+  pickFilter(constraint, addToExistingFilter) {
+    const { filters, type, value, field } = this.props;
+    const newFilters = addToExistingFilter ? filters : new List();
+    const compareTo = type === 'Pointer' ? value.toPointer() : value;
+
+    this.props.onFilterChange(newFilters.push(new Map({
+      field,
+      constraint,
+      compareTo
+    })));
+  }
+
+  //#endregion
+
   render() {
-    let { type, value, hidden, width, current, onSelect, onEditChange, onFilterChange, setCopyableValue, setRelation, setContextMenu, onPointerClick, row, col } = this.props;
+    let { type, value, hidden, width, current, onSelect, onEditChange, setCopyableValue, setRelation, onPointerClick, row, col } = this.props;
     let content = value;
     this.copyableValue = content;
     let classes = [styles.cell, unselectable];
@@ -171,95 +281,8 @@ export default class BrowserCell extends Component {
             onEditChange(true);
           }
         }}
-        onContextMenu={e => {
-          if (e.type === 'contextmenu') {
-            e.preventDefault();
-            onSelect({ row, col });
-            setCopyableValue(hidden ? undefined : this.copyableValue);
-
-            const { field, value, type } = this.props;
-            const pickFilter = (constraint) => {
-              const filters = new List();
-
-              let compareTo;
-              switch (type) {
-                case 'Pointer':
-                  compareTo = value.toPointer();
-                  break;
-                // TODO: handle other types
-
-                default:
-                  compareTo = value;
-              }
-
-              onFilterChange(filters.push(new Map({
-                field: field,
-                constraint,
-                compareTo
-              })));
-            };
-
-            const { pageX, pageY } = e;
-            const menuItems = [
-              //TODO: create menu items dynamically
-              {
-                text: 'Set filter...', items: [
-                  {
-                    text: `${field} exists`,
-                    callback: pickFilter.bind(this, 'exists')
-                  },
-                  {
-                    text: `${field} does not exist`,
-                    callback: pickFilter.bind(this, 'dne')
-                  },
-                  {
-                    text: `${field} equals ${this.copyableValue}`,
-                    callback: pickFilter.bind(this, 'eq')
-                  },
-                  {
-                    text: `${field} does not equal ${this.copyableValue}`,
-                    callback: pickFilter.bind(this, 'neq')
-                  }
-                ]
-              },
-              {
-                text: 'Add filter...', items: [
-                  { text: `${field} exists`, callback: () => { } },
-                  { text: `${field} does not exist`, callback: () => { } },
-                  { text: `${field} equals ${this.copyableValue}`, callback: () => { } },
-                  { text: `${field} does not equal ${this.copyableValue}`, callback: () => { } }
-                ]
-              }
-            ];
-
-            // Push "Get related records from..." context menu item if cell holds a Pointer
-            // or objectId and there's a class in relation
-            const pointerClassName = (this.props.value && this.props.value.className)
-              || (field === 'objectId' && this.props.className);
-            if (pointerClassName) {
-              const relatedRecordsMenuItem = { text: 'Get related records from...', items: [] };
-              this.props.schema.data.get('classes').forEach((cl, className) => {
-                cl.forEach((column, field) => {
-                  if (column.targetClass !== pointerClassName) { return; }
-                  relatedRecordsMenuItem.items.push({
-                    text: className, callback: () => {
-                      let relatedObject = value;
-                      if (this.props.field === 'objectId') {
-                        relatedObject = new Parse.Object(pointerClassName);
-                        relatedObject.id = value;
-                      }
-                      onPointerClick({ className, id: relatedObject.toPointer(), field })
-                    }
-                  })
-                });
-              });
-
-              relatedRecordsMenuItem.items.length > 0 && menuItems.push(relatedRecordsMenuItem  );
-            }
-
-            setContextMenu(pageX, pageY, menuItems);
-          }
-        }}>
+        onContextMenu={this.onContextMenu.bind(this)}
+      >
         {content}
       </span>
     );
